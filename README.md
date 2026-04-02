@@ -18,7 +18,7 @@ npm start
 [2] Poll getBountyClaims()   checks chain every N minutes
     │
     ▼
-[3] Claude vision AI         scores each new claim 0–10
+[3] Gemini vision AI         scores each new claim 0–10
     │                        across: authenticity / task completion /
     │                                creativity / evidence quality
     ▼
@@ -39,7 +39,7 @@ Every step is logged to `bot-state.json` — fully auditable.
 
 - Node.js ≥ 20
 - A wallet with enough ETH on Base or Arbitrum (bounty amount + ~0.001 ETH for gas)
-- Anthropic API key
+- Gemini 2.5 flash API key
 - Neynar API key + Farcaster signer UUID (for social transparency)
 
 ---
@@ -77,47 +77,27 @@ pm2 save        # remember it across reboots
 pm2 startup     # auto-start on system boot
 ```
 
-Useful PM2 commands:
-```bash
-pm2 logs poidh-bot     # live logs
-pm2 status             # process list
-pm2 stop poidh-bot     # stop
-pm2 restart poidh-bot  # restart
-```
-
-You can run this on any machine — your laptop, a $5/month VPS (DigitalOcean, Hetzner, etc.), or a Mac Mini.
-
 ---
 
 ## Configuration
 
 Run `npm run setup` for the guided wizard, or edit `.env` manually:
 
-| Variable | Required | Default | Description |
-|---|---|---|---|
-| `BOT_PRIVATE_KEY` | ✅ | — | Bot wallet private key (hex) |
-| `ANTHROPIC_API_KEY` | ✅ | — | Claude API key |
-| `NETWORK` | ✅ | `base` | `base` or `arbitrum` |
-| `BOUNTY_AMOUNT_ETH` | ✅ | `0.001` | Prize in ETH |
-| `MIN_SCORE` | ✅ | `6.0` | Minimum AI score to accept (0–10) |
-| `POLL_INTERVAL_MS` | ✅ | `300000` | Poll frequency in ms |
-| `NEYNAR_API_KEY` | ⬜ | — | For Farcaster posting |
-| `FARCASTER_SIGNER_UUID` | ⬜ | — | Farcaster signer |
-| `RPC_URL` | ⬜ | public | Custom RPC endpoint |
-| `BOUNTY_NAME` | ⬜ | built-in | Override bounty name |
-| `BOUNTY_DESCRIPTION` | ⬜ | built-in | Override bounty description |
+### Environment Variables
 
-### Generate a wallet
-
-```bash
-# Option A — Node.js
-node -e "import('viem/accounts').then(m => console.log(m.generatePrivateKey()))"
-
-# Option B — Foundry
-cast wallet new
-```
-
-Fund the address with ETH on Base before running.
+| Variable                  | Required | Default          | Description |
+|---------------------------|----------|------------------|-----------|
+| `BOT_PRIVATE_KEY`         | ✅ Yes   | —                | Private key of the bot's EOA wallet (must start with `0x` or without). **Never commit this.** |
+| `GEMINI_API_KEY`          | ✅ Yes   | —                | Google Gemini API key (for AI evaluation + vision). Get it from [Google AI Studio](https://aistudio.google.com/app/apikey) |
+| `NETWORK`                 | No       | `base`           | Blockchain network: `base` (recommended) or `arbitrum` |
+| `BOUNTY_AMOUNT_ETH`       | No       | `0.001`          | Bounty prize amount in ETH |
+| `MIN_SCORE`               | No       | `6.0`            | Minimum AI score (0–10) required to auto-accept a submission |
+| `POLL_INTERVAL_MS`        | No       | `300000`         | How often to check for new claims (in milliseconds). Default = 5 minutes |
+| `RPC_URL`                 | No       | Public RPC       | Custom RPC endpoint (recommended for stability: Alchemy or Base public RPC) |
+| `NEYNAR_API_KEY`          | No       | —                | Neynar API key for posting to Farcaster (optional but recommended) |
+| `FARCASTER_SIGNER_UUID`   | No       | —                | Farcaster signer UUID (required if using Neynar) |
+| `BOUNTY_NAME`             | No       | Built-in         | Custom bounty name (leave empty to use default) |
+| `BOUNTY_DESCRIPTION`      | No       | Built-in         | Custom bounty description (leave empty to use default) |
 
 ---
 
@@ -155,35 +135,41 @@ The only human action: `npm start`. Everything after is autonomous.
 
 ## AI Evaluation
 
-Each claim is scored by **Claude claude-opus-4-5 with vision** across four dimensions:
+Each submission is automatically evaluated by **Google Gemini 2.5 Flash (with vision)** using a structured prompt.
 
-| Dimension | What it checks |
-|---|---|
-| Authenticity (25%) | Real photo vs. AI-generated or stock image |
-| Task Completion (35%) | Does it actually show the required action? |
-| Creativity (20%) | Originality and spirit of the bounty |
-| Evidence Quality (20%) | Clarity, context, credibility |
+The AI scores the claim across five dimensions:
 
-Score ≥ `MIN_SCORE` to be eligible. Highest score wins. Full reasoning is stored in `bot-state.json` and posted to Farcaster.
+| Dimension          | Weight | What it evaluates |
+|--------------------|--------|-------------------|
+| **Authenticity**   | 25%    | Real photo vs AI-generated, stock image, or edited |
+| **Task Completion**| 35%    | Does it clearly show the required real-world action? |
+| **Creativity**     | 20%    | Originality and how well it captures the spirit of the bounty |
+| **Evidence Quality**| 20%   | Photo clarity, context, timestamps, and supporting details |
+
+- Only submissions with a score **≥ `MIN_SCORE`** (default: 6.0/10) are eligible.
+- The highest-scoring valid submission wins and is paid automatically.
+- Full reasoning, scores, and verdict are logged locally and posted publicly on Farcaster.
 
 ---
 
 ## Contract Addresses
 
-| Network | Address |
-|---|---|
-| Base | `0xb502c5856f7244dccdd0264a541cc25675353d39` |
-| Arbitrum | `0x0aa50ce0d724cc28f8f7af4630c32377b4d5c27d` |
+| Network   | Contract Address                          |
+|-----------|-------------------------------------------|
+| **Base** (Recommended) | `0x5555Fa783936C260f77385b4E153B9725feF1719` |
+| Arbitrum  | `0x0aa50ce0d724cc28f8f7af4630c32377b4d5c27d` |
 
 ---
 
-## Limitations
+## Limitations & Known Issues
 
-| Issue | Notes |
-|---|---|
-| IPFS speed | Slow IPFS nodes may fail image fetch → lower score. Use Pinata for submissions. |
-| Single bounty | One bounty per `bot-state.json`. Delete it and restart for a fresh cycle. |
-| Hot wallet | Private key lives in `.env`. Use a dedicated wallet with minimal funds. |
+| Issue                    | Description |
+|--------------------------|-----------|
+| **RPC Reliability**      | Free/public RPCs may occasionally fail. Consider using Alchemy or a paid RPC for 24/7 uptime. |
+| **Image Fetching**       | IPFS/arweave links can be slow or unreachable. The bot retries alternative gateways. |
+| **Single Bounty Mode**   | Currently supports monitoring **one active bounty** at a time. Delete `bot-state.json` to start a new one. |
+| **Hot Wallet**           | The bot uses a hot wallet (private key in `.env`). Only fund it with what you're willing to lose. |
+| **No Manual Override**   | Once started, the bot runs fully autonomously. No human intervention is allowed after launch. |
 
 ---
 
